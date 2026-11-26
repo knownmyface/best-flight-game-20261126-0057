@@ -1,39 +1,65 @@
-// Canyon Thread — a 3D chase-view flight game for make.fun's
-// "Make the best flight game" bounty. The game is this directory's game/
-// folder, plain static files a desktop browser loads offline (game/index.html
-// and its ES modules, Three.js vendored under game/vendor/, no network
-// request), and this program hands it in: it copies game/ and screenshots/
-// from beside this file to /output and writes /output/dossier.json, the
-// summary the judge reads, with the vendored make.fun library.
-//
-// Serve it locally with `node serve.ts`, then open http://localhost:8080.
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
-//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+// Canyon Thread v2 — the hand-in program.
+// This file runs on Node 22 inside the grader's container (and locally with
+// MAKEFUN_OUTPUT_DIR set). It takes the game as it stands in this repo — the
+// static files under game/ and the screenshots under screenshots/ — and lays
+// them out under the output directory with the dossier the judge reads,
+// built by the vendored make.fun library. It does no building, no network
+// and no guessing: a plain copy plus the dossier, twice the same bytes.
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const here = fileURLToPath(new URL('.', import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const repoRoot = fileURLToPath(new URL('.', import.meta.url));
+const outDir = resolve(process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
-mkdirSync(out, { recursive: true });
-cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
-mkdirSync(join(out, 'screenshots'), { recursive: true });
-if (existsSync(join(here, 'screenshots'))) cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+const gameSrc = join(repoRoot, 'game');
+const shotsSrc = join(repoRoot, 'screenshots');
 
-// The scorer's own caps (reference/gate.json): only text_max_bytes shapes the bytes; the others refuse an entry the
-// scorer would refuse (more than 4 screenshots or one over 256 KiB; more than 993 files in game/ or 48 MiB of game
-// files, in all, or a path under game/ over 1000 bytes: game/ counts beside /output's own 1000-entry cap, its
-// screenshots/ and dossier.json).
-writeFileSync(
-  join(out, 'dossier.json'),
-  buildDossier(out, {
+function countFiles(dir) {
+  let n = 0;
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    n += statSync(p).isDirectory() ? countFiles(p) : 1;
+  }
+  return n;
+}
+
+function main() {
+  if (!existsSync(gameSrc)) throw new Error('game/ is missing from the repository');
+  mkdirSync(outDir, { recursive: true });
+
+  // A clean output directory: stale files from an earlier run must not leak in.
+  for (const name of readdirSync(outDir)) {
+    rmSync(join(outDir, name), { recursive: true, force: true });
+  }
+
+  cpSync(gameSrc, join(outDir, 'game'), { recursive: true });
+
+  const shotsOut = join(outDir, 'screenshots');
+  mkdirSync(shotsOut, { recursive: true });
+  if (existsSync(shotsSrc)) {
+    cpSync(shotsSrc, shotsOut, { recursive: true });
+  }
+
+  const dossier = buildDossier(outDir, {
     text_max_bytes: 163840,
     screenshots: { max: 4, max_bytes: 262144 },
     game_max_files: 993,
     game_max_bytes: 50331648,
     game_path_max_bytes: 1000,
-  }),
-);
+  });
+  writeFileSync(join(outDir, 'dossier.json'), dossier);
+
+  // Prove the dossier round-trips before calling the hand-in done: a corrupt
+  // dossier would fail the gate silently, so refuse to finish with one.
+  const roundTrip = JSON.parse(readFileSync(join(outDir, 'dossier.json'), 'utf8'));
+  if (!roundTrip || typeof roundTrip !== 'object') throw new Error('dossier.json did not parse back');
+  if (!existsSync(join(outDir, 'game', 'index.html'))) throw new Error('game/index.html missing from output');
+
+  const shots = existsSync(shotsSrc) ? readdirSync(shotsSrc).filter((f) => !f.startsWith('.')) : [];
+  console.log(`handed in: ${countFiles(join(outDir, 'game'))} game files, ${shots.length} screenshots, dossier ${dossier.length} bytes`);
+}
+
+main();

@@ -1,251 +1,356 @@
-// Canyon Thread — entry point. Wires the renderer, the flight model, the
-// missions, the HUD and the screens into one loop. The game runs from
-// static files only: no network, no build step.
-import * as THREE from '../vendor/three/three.module.min.js';
-import { GAME, DIFFICULTIES } from './config.js';
-import { buildTerrain, terrainHeight, animateClouds } from './terrain.js';
-import { buildAircraft } from './aircraft.js';
-import { buildRingMeshes, paintRings, crossedRing, distanceToRing } from './rings.js';
-import { freshFlight, stepFlight, headingDegrees } from './physics.js';
-import {
-  MISSIONS, startMission, stepMission, ringThreaded, saveBest, loadBest,
-} from './missions.js';
-import { createInput } from './input.js';
-import { createAudio } from './audio.js';
-import { buildHud, titleHtml, resultsHtml } from './hud.js';
-import { stageShot } from './shots.js';
+// Canyon Thread v2 — the game itself.
+// Wires the world, the sky, the jet, the rings, the drones and the HUD into
+// one loop: a chase camera that never fights the pilot, a menu that is also
+// the hangar, and sorties that end in a debrief. For screenshots the game
+// can fly itself (?shot=cover|rings|drones|hangar) with an autopilot that
+// chases the next ring, so every still is a real render of a real flight.
+
+import * as THREE from 'three';
+import { buildWorld, heightAt, coursePoint, ringStations, WORLD } from './world.js';
+import { SkyDome, WindField } from './sky.js';
+import { JETS, jetById, buildJetMesh } from './jets.js';
+import { Flight } from './flight.js';
+import { RingCourse } from './rings.js';
+import { DroneField, droneAnchors } from './drones.js';
+import { Cannon } from './weapons.js';
+import { MISSIONS, DIFFS, missionById, diffById, Sortie } from './missions.js';
+import { Hud } from './hud.js';
+import { SoundBank } from './audio.js';
+import { Controls } from './input.js';
 
 const params = new URLSearchParams(window.location.search);
-const SHOT = params.get('shot');
+const SHOT = params.get('shot') || '';
+const SHOT_AFTER = parseInt(params.get('t') || '7000', 10);
 
-// ---------- Renderer / scene ----------
-const canvas = document.getElementById('game');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// --- renderer / scene -------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+document.getElementById('app').appendChild(renderer.domElement);
+
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.5, 9000);
-camera.position.set(0, 60, 1050);
+scene.fog = new THREE.Fog(0xe8a86a, 1500, 6800);
+const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.5, 20000);
+camera.position.set(0, 260, 1060);
 
-const { clouds } = buildTerrain(scene);
-const plane = buildAircraft();
-plane.rotation.order = 'YXZ';
-scene.add(plane);
+const hemi = new THREE.HemisphereLight(0xbfd9ff, 0x8a5a3a, 0.62);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffe0b0, 1.35);
+sun.position.set(-1400, 900, -700);
+scene.add(sun);
 
-// ---------- Game state ----------
-const input = createInput();
-const audio = createAudio();
-const hud = buildHud();
+// --- world ------------------------------------------------------------------
+const world = buildWorld();
+scene.add(world.terrain);
+scene.add(world.runway);
+scene.add(world.river);
+scene.add(world.scatter);
+const sky = new SkyDome(scene);
 
-const game = {
-  screen: 'title', // title | play | paused | over
-  flight: freshFlight(),
-  mission: null,
-  ringMeshes: null,
-  ringGroup: null,
-  selectedMission: 0,
-  selectedDifficulty: 'pilot',
-  frozen: false, // screenshot staging: render the frame, do not advance
-  isNewBest: false,
-  titleOrbit: 0,
-};
+// --- game objects -----------------------------------------------------------
+const controls = new Controls();
+const hud = new Hud();
+const sounds = new SoundBank();
+const cannon = new Cannon(scene);
+const wind = new WindField(1);
 
-function clearRings() {
-  if (game.ringGroup) {
-    scene.remove(game.ringGroup);
-    game.ringGroup = null;
-    game.ringMeshes = null;
-  }
-}
+let jetDef = jetById(params.get('jet') || 'kestrel');
+let missionDef = missionById(params.get('mission') || 'ringrun');
+let diffDef = diffById(params.get('diff') || 'pilot');
+let flight = null;
+let jetMesh = null;
+let rings = null;
+let drones = null;
+let sortie = null;
 
-game.startMission = function startMissionByIndex(missionIndex, difficultyKey) {
-  clearRings();
-  const missionDef = MISSIONS[missionIndex];
-  const difficulty = DIFFICULTIES[difficultyKey];
-  game.mission = startMission(missionDef, difficulty);
-  game.flight = freshFlight();
-  game.flight.fuel = missionDef.fuel;
-  const { group, meshes } = buildRingMeshes(game.mission.rings);
-  game.ringGroup = group;
-  game.ringMeshes = meshes;
-  scene.add(group);
-  paintRings(meshes, 0);
-  game.screen = 'play';
-  game.isNewBest = false;
-  document.getElementById('screen-title').classList.add('hidden');
-  document.getElementById('screen-over').classList.add('hidden');
-  document.getElementById('hud').classList.remove('hidden');
-  hud.banner(`${missionDef.name} — ${missionDef.tagline}`, 3.2);
-};
-
-function showTitle() {
-  game.screen = 'title';
-  game.mission = null;
-  clearRings();
-  game.flight = freshFlight();
-  renderTitle();
-  document.getElementById('screen-title').classList.remove('hidden');
-  document.getElementById('screen-over').classList.add('hidden');
-  document.getElementById('hud').classList.add('hidden');
-}
-
-let lastTitleKey = '';
-function renderTitle() {
-  const key = `${game.selectedMission}|${game.selectedDifficulty}`;
-  if (key === lastTitleKey) return;
-  lastTitleKey = key;
-  document.querySelector('#screen-title .screen-inner').innerHTML =
-    titleHtml(game.selectedMission, game.selectedDifficulty);
-}
-
-function showResults() {
-  game.screen = 'over';
-  const { mission, flight } = game;
-  if (mission.status === 'won') {
-    game.isNewBest = saveBest(mission.bestKey, mission.elapsed);
-  }
-  document.querySelector('#screen-over .screen-inner').innerHTML = resultsHtml(mission, flight, game.isNewBest);
-  document.getElementById('screen-over').classList.remove('hidden');
-}
-
-function togglePause() {
-  if (game.screen === 'play') {
-    game.screen = 'paused';
-    hud.banner('PAUSED — press P to fly on', 60);
-  } else if (game.screen === 'paused') {
-    game.screen = 'play';
-    hud.banner('', 0.1);
-  }
-}
-
-// ---------- Camera: chase view, smoothed, never fighting the pilot ----------
-const camPos = new THREE.Vector3(0, 60, 1050);
-const camTarget = new THREE.Vector3(0, 30, 980);
-function updateCamera(dt) {
-  const f = game.flight;
-  if (game.screen === 'title') {
-    // Slow orbit over the canyon behind the title screen.
-    game.titleOrbit += dt * 0.02;
-    const r = 700;
-    const cx = Math.sin(game.titleOrbit) * r;
-    const cz = 200 + Math.cos(game.titleOrbit) * r;
-    camPos.lerp(new THREE.Vector3(cx, 260, cz), Math.min(1, dt * 1.2));
-    camTarget.lerp(new THREE.Vector3(0, 60, 0), Math.min(1, dt * 1.2));
-  } else {
-    const forward = new THREE.Vector3(
-      -Math.sin(f.heading) * Math.cos(f.pitch),
-      Math.sin(f.pitch),
-      -Math.cos(f.heading) * Math.cos(f.pitch),
-    );
-    const want = f.pos.clone()
-      .addScaledVector(forward, -15)
-      .add(new THREE.Vector3(0, 5.2, 0));
-    // keep the camera out of the ground
-    want.y = Math.max(want.y, terrainHeight(want.x, want.z) + 3);
-    camPos.lerp(want, Math.min(1, dt * 5));
-    camTarget.lerp(
-      f.pos.clone().addScaledVector(forward, 34).add(new THREE.Vector3(0, 1.5, 0)),
-      Math.min(1, dt * 7),
-    );
-  }
-  camera.position.copy(camPos);
-  camera.lookAt(camTarget);
-}
-
-function updatePlane() {
-  const f = game.flight;
-  plane.position.copy(f.pos);
-  plane.rotation.y = f.heading;
-  plane.rotation.x = f.pitch;
-  plane.rotation.z = -f.bank;
-  plane.visible = true;
-  // engine glow brightens with throttle
-  const glow = plane.getObjectByName('engineGlow');
-  if (glow) glow.material.color.setHex(f.throttle > 0.6 ? 0xffd23f : 0xff9a3d);
-}
-
-// ---------- Main loop ----------
-let lastNow = performance.now();
+let screen = 'menu'; // menu | flying | over
 let elapsed = 0;
+let shotDone = false;
+let chaseDist = 42;
 
-function frame() {
-  requestAnimationFrame(frame);
-  const now = performance.now();
-  const dt = Math.min((now - lastNow) / 1000, 0.05);
-  lastNow = now;
+// --- menu / hangar ----------------------------------------------------------
+const menuEl = document.getElementById('menu');
+const endEl = document.getElementById('end');
+
+function buildMenu() {
+  const missionBox = document.getElementById('missionList');
+  missionBox.innerHTML = '';
+  MISSIONS.forEach((m) => {
+    const card = document.createElement('button');
+    card.className = `pick mission${m.id === missionDef.id ? ' sel' : ''}`;
+    card.innerHTML = `<b>${m.name}</b><span>${m.brief}</span><em>${m.rings} rings${m.drones ? ' · 9 drones' : ''}${m.landing ? ' · land it' : ''}${m.timeLimit ? ` · ${m.timeLimit}s` : ''}</em>`;
+    card.onclick = () => {
+      missionDef = m;
+      sounds.ensure();
+      sounds.click();
+      buildMenu();
+    };
+    missionBox.appendChild(card);
+  });
+  const diffBox = document.getElementById('diffList');
+  diffBox.innerHTML = '';
+  DIFFS.forEach((d) => {
+    const b = document.createElement('button');
+    b.className = `pick diff${d.id === diffDef.id ? ' sel' : ''}`;
+    b.innerHTML = `<b>${d.label}</b><span>${d.desc}</span>`;
+    b.onclick = () => {
+      diffDef = d;
+      sounds.ensure();
+      sounds.click();
+      buildMenu();
+    };
+    diffBox.appendChild(b);
+  });
+  const jetBox = document.getElementById('jetList');
+  jetBox.innerHTML = '';
+  JETS.forEach((j) => {
+    const card = document.createElement('button');
+    card.className = `pick jet${j.id === jetDef.id ? ' sel' : ''}`;
+    card.innerHTML = `<b>${j.name}</b><span>${j.tag}</span>`
+      + `<em>SPD ${j.cruise}–${j.top} · FUEL ${j.fuel} · HULL ${j.hp} · TURN ×${j.turn}</em>`
+      + `<span class="bar"><i style="width:${Math.round((j.top / 178) * 100)}%;background:#7fb4d8"></i></span>`
+      + `<span class="bar"><i style="width:${Math.round((j.fuel / 145) * 100)}%;background:#ffb347"></i></span>`
+      + `<span class="bar"><i style="width:${Math.round((j.hp / 165) * 100)}%;background:#7dff8a"></i></span>`
+      + `<span>${j.desc}</span>`;
+    card.onclick = () => {
+      jetDef = j;
+      sounds.ensure();
+      sounds.click();
+      buildMenu();
+    };
+    jetBox.appendChild(card);
+  });
+}
+
+function showMenu() {
+  screen = 'menu';
+  menuEl.style.display = 'flex';
+  endEl.style.display = 'none';
+  document.getElementById('hud').style.display = 'none';
+  buildMenu();
+}
+
+function showEnd() {
+  screen = 'over';
+  sounds.engine(0, 0, false); // the engine note stops with the sortie
+  const d = sortie.debrief();
+  document.getElementById('endTitle').textContent = d.state === 'won' ? 'SORTIE COMPLETE' : `SORTIE LOST — ${d.cause}`;
+  document.getElementById('endTitle').className = d.state === 'won' ? 'win' : 'lose';
+  document.getElementById('endStats').innerHTML =
+    `<div><b>${d.score}</b><span>SCORE</span></div>`
+    + `<div><b>${d.rings}/${d.ringTotal}</b><span>RINGS</span></div>`
+    + `<div><b>${d.drones}</b><span>DRONES</span></div>`
+    + `<div><b>${d.time}</b><span>TIME</span></div>`
+    + `<div><b>${d.jet} · ${d.diff}</b><span>AIRFRAME</span></div>`;
+  endEl.style.display = 'flex';
+  document.getElementById('hud').style.display = 'none';
+  if (d.state === 'won') sounds.win();
+}
+
+document.getElementById('flyBtn').addEventListener('click', () => {
+  sounds.ensure();
+  sounds.click();
+  startSortie();
+});
+document.getElementById('againBtn').addEventListener('click', () => {
+  sounds.ensure();
+  sounds.click();
+  startSortie();
+});
+document.getElementById('changeBtn').addEventListener('click', () => {
+  sounds.ensure();
+  sounds.click();
+  showMenu();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Enter' && screen === 'menu') startSortie();
+  if (e.code === 'Enter' && screen === 'over') startSortie();
+});
+
+// --- sortie -----------------------------------------------------------------
+function startSortie() {
+  if (jetMesh) scene.remove(jetMesh);
+  jetMesh = buildJetMesh(jetDef);
+  scene.add(jetMesh);
+  flight = new Flight(jetDef, heightAt);
+  flight.attach(jetMesh);
+  const start = coursePoint(0);
+  flight.reset({ x: start.x, y: heightAt(start.x, start.z) + 58, z: start.z, heading: start.heading });
+  if (rings) scene.remove(rings.group);
+  rings = new RingCourse(scene, ringStations(missionDef.rings));
+  if (drones) scene.remove(drones.group);
+  drones = new DroneField(scene, missionDef.drones ? droneAnchors(ringStations(missionDef.rings)) : []);
+  sortie = new Sortie(missionDef, diffDef, jetDef);
+  wind.strength = diffDef.wind;
+  menuEl.style.display = 'none';
+  endEl.style.display = 'none';
+  document.getElementById('hud').style.display = 'block';
+  screen = 'flying';
+  elapsed = 0;
+  hud.message(`${missionDef.name} — ${jetDef.name}`, 2.6, missionDef.brief);
+  sounds.engine(0.4, 0.6, true);
+}
+
+// --- autopilot (screenshot mode): chase the next ring, shoot what is ahead --
+function autopilotInput() {
+  const input = { pitch: 0, roll: 0, yaw: 0, throttle: 0.72, boost: false, fire: false };
+  const target = rings && rings.current();
+  if (!target || !flight.alive) return input;
+  const to = new THREE.Vector3(target.x - flight.pos.x, target.y - flight.pos.y, target.z - flight.pos.z);
+  const dist = to.length();
+  to.normalize();
+  const lx = to.dot(flight.right());
+  const ahead = to.dot(flight.forward());
+  if (ahead < 0.1) {
+    // Target behind: level turn to re-acquire, never pitch up into a spiral.
+    input.roll = Math.max(-0.9, Math.min(0.9, -Math.sign(lx || 1) * 0.9));
+    input.pitch = 0;
+  } else {
+    // Hard steering: the canyon zigzags ~70 degrees every 250 m, so the
+    // autopilot banks near the limit to stay on the course.
+    input.roll = Math.max(-1, Math.min(1, -lx * 2.4));
+    // Pitch by flight-path angle, not by the tilted body frame: the angle the
+    // target sits above the horizon, minus the angle the jet is already
+    // climbing at. A steep bank can no longer command a climb into the wall.
+    const horiz = Math.max(20, Math.hypot(to.x, to.z));
+    const wantAngle = Math.atan2(to.y, horiz);
+    // Velocity follows the nose, so the nose's elevation is the path angle.
+    const pathAngle = Math.asin(Math.max(-1, Math.min(1, flight.forward().y)));
+    input.pitch = Math.max(-1, Math.min(1, (wantAngle - pathAngle) * 2.0));
+  }
+  // Ease off the throttle in a hard turn so the turn radius stays inside the
+  // canyon; open it up again on a straight, distant leg.
+  input.throttle = Math.abs(input.roll) > 0.5 || dist < 120 ? 0.55 : 0.8;
+  // Shoot a drone that wanders into the nose cone.
+  for (const d of drones.drones) {
+    if (!d.alive) continue;
+    const dv = d.body.position.clone().sub(flight.pos);
+    const dd = dv.length();
+    if (dd < 420 && dv.normalize().dot(flight.forward()) > 0.94) {
+      input.fire = true;
+      break;
+    }
+  }
+  return input;
+}
+
+// --- main loop ---------------------------------------------------------------
+const clock = new THREE.Clock();
+const camTarget = new THREE.Vector3();
+const camPos = new THREE.Vector3();
+
+// One simulation step: wind, flight, cannon, rings, drones, sky, camera,
+// HUD. The live loop calls it once a frame; screenshot mode calls it many
+// times up front to pre-roll the flight to a staged moment.
+function stepGame(dt, updateHud = true) {
   elapsed += dt;
-  animateClouds(clouds, dt);
+  wind.update(dt);
+  const windVec = wind.velocity();
+  const input = SHOT ? autopilotInput() : controls.read();
+  if (!SHOT) sounds.ensure();
+  flight.update(dt, input, { wind: windVec, fuelBurn: 0.62 * diffDef.fuelBurn });
 
-  if (game.screen === 'title') {
-    // Title-screen keys: pick mission / difficulty / start.
-    if (input.wasPressed('1')) game.selectedMission = 0;
-    if (input.wasPressed('2')) game.selectedMission = 1;
-    if (input.wasPressed('3')) game.selectedMission = 2;
-    if (input.wasPressed('q')) game.selectedDifficulty = 'cadet';
-    if (input.wasPressed('w')) game.selectedDifficulty = 'pilot';
-    if (input.wasPressed('e')) game.selectedDifficulty = 'ace';
-    if (input.wasPressed('enter') || input.wasPressed(' ')) {
-      audio.unlock();
-      game.startMission(game.selectedMission, game.selectedDifficulty);
+  // Cannon: fire along the nose, test the drones.
+  if (input.fire && cannon.ready) {
+    const origin = flight.pos.clone().addScaledVector(flight.forward(), 14);
+    const dir = flight.forward();
+    cannon.fire(origin, dir);
+    sounds.shot();
+    const hit = drones.rayHit(origin, dir);
+    if (hit) {
+      const result = drones.damage(hit);
+      if (result === 'down') {
+        sortie.droneDown();
+        flight.fuel = Math.min(flight.maxFuel, flight.fuel + 8);
+        hud.message('DRONE DOWN  +150', 1.6, 'Fuel cell recovered +8');
+        sounds.boom();
+      }
     }
-    renderTitle();
-  } else if (game.screen === 'play' && !game.frozen) {
-    const f = game.flight; const m = game.mission;
-    if (input.wasPressed('p') || input.wasPressed('escape')) togglePause();
-    if (input.wasPressed('r')) game.startMission(game.selectedMission, game.selectedDifficulty);
-    if (input.wasPressed('m')) { const on = audio.toggle(); hud.banner(on ? 'SOUND ON' : 'SOUND OFF', 1.2); }
+  }
+  cannon.update(dt);
 
-    const ctl = input.poll();
-    const wind = m.mission.wind * m.difficulty.wind;
-    const events = stepFlight(f, ctl, dt, wind);
-    audio.update(f.throttle, f.speed, f.airborne);
-    if (events.tookOff) hud.banner('AIRBORNE — follow the teal ring', 2.5);
-    if (events.scraped) { audio.thud(false); hud.banner('SCRAPE — the canyon bit back', 1.6); }
-    if (events.outOfFuel) hud.banner('FUEL EMPTY — gliding now', 2.5);
+  // Rings.
+  const passed = rings.checkPass(flight.pos);
+  if (passed >= 0) {
+    sortie.ringPassed(passed);
+    hud.message(`RING ${sortie.rings}/${rings.total}`, 1.4, passed === rings.total - 1 ? 'Last one — bring her home' : '');
+    sounds.chime();
+  }
+  rings.update(dt);
+  drones.update(dt);
+  sky.update(dt, camera, windVec.x);
 
-    // Ring threading: only the next ring in order counts.
-    const ring = m.rings[m.nextRing];
-    if (ring && crossedRing(ring, f.prevPos, f.pos)) {
-      ring.passed = true;
-      ringThreaded(m);
-      paintRings(game.ringMeshes, m.nextRing);
-      audio.ring();
-      hud.banner(
-        m.nextRing >= m.rings.length ? 'ALL RINGS THREADED' : `RING ${m.ringsDone} / ${m.mission.rings} — +100`,
-        2.0,
-      );
-    }
-
-    // World edge: nudge the pilot back toward the canyon.
-    if (Math.abs(f.pos.x) > 1300 || Math.abs(f.pos.z) > 1300) {
-      hud.banner('LEAVING THE CANYON — turn back', 1.5);
-      f.heading += (Math.atan2(f.pos.x, f.pos.z) - f.heading) * dt * 0.4;
-    }
-
-    const outcome = stepMission(m, f, dt, events);
-    if (outcome) {
-      if (events.crashed) audio.thud(true);
-      showResults();
-    }
-  } else if (game.screen === 'paused') {
-    if (input.wasPressed('p') || input.wasPressed('escape')) togglePause();
-    if (input.wasPressed('r')) game.startMission(game.selectedMission, game.selectedDifficulty);
-  } else if (game.screen === 'over') {
-    if (input.wasPressed('r') || input.wasPressed('enter')) {
-      game.startMission(game.selectedMission, game.selectedDifficulty);
-    }
-    if (input.wasPressed('t')) showTitle();
+  // Landing / win / lose.
+  if (missionDef.landing && rings.done) sortie.tryLand(flight, WORLD.runway, flight.speed);
+  if (missionDef.id === 'patrol') sortie.checkPatrolWin(rings.done, drones.aliveCount);
+  else sortie.checkRingWin(rings.done);
+  const outcome = sortie.update(dt, flight);
+  if (outcome !== 'flying') {
+    if (outcome === 'lost') sounds.boom();
+    showEnd();
+    return;
   }
 
-  // HUD + aircraft + camera every frame, even frozen (for screenshots).
-  if (game.mission && game.screen !== 'title') {
-    const f = game.flight; const m = game.mission;
-    const ring = m.rings[m.nextRing];
-    const alt = f.pos.y - terrainHeight(f.pos.x, f.pos.z);
-    hud.update(f, m, alt, ring ? distanceToRing(ring, f.pos) : null, dt);
+  // Chase camera: level with the horizon, never tilted by the jet's pitch.
+  // The jet banks and dives inside the frame; the camera stays calm so the
+  // canyon walls and the sky stay where the eye expects them.
+  const fwd = flight.forward();
+  const level = new THREE.Vector3(fwd.x, 0, fwd.z).normalize();
+  camTarget.copy(flight.pos).addScaledVector(level, 55).add(new THREE.Vector3(0, -2, 0));
+  camPos.copy(flight.pos).addScaledVector(level, -chaseDist).add(new THREE.Vector3(0, 10, 0));
+  camera.position.lerp(camPos, 1 - Math.exp(-dt * 4.2));
+  camera.lookAt(camTarget);
+  camera.up.set(0, 1, 0);
+
+  sounds.engine(flight.speed / (jetDef.top * 1.32), input.throttle, flight.alive);
+  if (updateHud) {
+    hud.update(dt, {
+      flight, sortie, rings, drones, wind, camera, heightAt, runway: WORLD.runway,
+    });
   }
-  updatePlane();
-  updateCamera(dt);
+}
+
+// Put the camera exactly on the chase position (no lerp): the first rendered
+// frame after a pre-roll is already the staged shot.
+function snapCamera() {
+  const fwd = flight.forward();
+  const level = new THREE.Vector3(fwd.x, 0, fwd.z).normalize();
+  camera.position.copy(flight.pos).addScaledVector(level, -chaseDist).add(new THREE.Vector3(0, 10, 0));
+  camera.lookAt(flight.pos.clone().addScaledVector(level, 55).add(new THREE.Vector3(0, -2, 0)));
+  camera.up.set(0, 1, 0);
+}
+
+// Run the simulation forward without rendering: the screenshot modes stage a
+// real flight (rings passed, HUD live, message faded) before the first frame.
+function preroll(seconds) {
+  const steps = Math.round(seconds * 60);
+  for (let i = 0; i < steps; i++) {
+    if (screen !== 'flying') break;
+    stepGame(1 / 60, i === steps - 1);
+  }
+  if (screen === 'flying') {
+    snapCamera();
+    document.title = 'SHOT READY';
+    window.__shotReady = true;
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  if (screen === 'flying' && flight) {
+    stepGame(dt);
+  } else {
+    // Menu backdrop: a slow orbit over the canyon so the hangar never sits on black.
+    const t = clock.elapsedTime * 0.04;
+    camera.position.set(Math.sin(t) * 900, 420, Math.cos(t) * 900);
+    camera.lookAt(0, 60, 0);
+    sky.update(dt, camera, 4);
+    if (rings) rings.update(dt);
+    if (drones) drones.update(dt);
+  }
+
   renderer.render(scene, camera);
 }
 
@@ -255,50 +360,18 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// Clicking a mission/difficulty row on the title screen selects it;
-// clicking anywhere on the title starts the flight.
-document.getElementById('screen-title').addEventListener('click', (e) => {
-  const row = e.target.closest('[data-mission]');
-  if (row) { game.selectedMission = Number(row.dataset.mission); return; }
-  const diff = e.target.closest('[data-diff]');
-  if (diff) { game.selectedDifficulty = diff.dataset.diff; return; }
-  audio.unlock();
-  game.startMission(game.selectedMission, game.selectedDifficulty);
-});
-document.getElementById('screen-over').addEventListener('click', () => {
-  game.startMission(game.selectedMission, game.selectedDifficulty);
-});
-
-// ---------- Screenshot staging ----------
-if (SHOT) {
-  const screen = stageShot(SHOT, game);
-  game.frozen = true;
-  game.screen = screen === 'title' ? 'title' : 'play';
-  if (screen === 'title') {
-    showTitle();
-  } else {
-    // Repaint the rings for the staged state: threaded ones green, the
-    // next one teal (the autopilot threads rings without going through
-    // the frame loop that normally repaints them).
-    if (game.ringMeshes) paintRings(game.ringMeshes, game.mission.nextRing);
-    document.getElementById('screen-title').classList.add('hidden');
-    document.getElementById('screen-over').classList.add('hidden');
-    document.getElementById('hud').classList.remove('hidden');
-    const f = game.flight; const m = game.mission;
-    const ring = m.rings[m.nextRing];
-    const alt = f.pos.y - terrainHeight(f.pos.x, f.pos.z);
-    hud.update(f, m, alt, ring ? distanceToRing(ring, f.pos) : null, 0);
-    hud.banner(SHOT === 'landing' ? 'FINAL APPROACH — strip ahead' : `RING ${m.ringsDone + 1} / ${m.mission.rings}`, 60);
-  }
-  // Settle the camera on the staged frame before the first paint.
-  for (let i = 0; i < 90; i += 1) updateCamera(1 / 60);
-  updatePlane();
+// Shot modes pick their own staging; the hangar shot stays on the menu.
+if (SHOT === 'hangar') {
+  chaseDist = 42;
+  showMenu();
+} else if (SHOT) {
+  chaseDist = SHOT === 'rings' ? 38 : 42;
+  // The autopilot needs a live sortie from the first frame, pre-rolled to the
+  // staged moment so the first render is already the shot.
+  startSortie();
+  preroll(SHOT_AFTER / 1000);
 } else {
-  showTitle();
+  showMenu();
 }
 
-// Test hook: play-tests and the screenshot driver read live state here.
-window.__game = game;
-window.__headingDegrees = headingDegrees;
-
-frame();
+animate();

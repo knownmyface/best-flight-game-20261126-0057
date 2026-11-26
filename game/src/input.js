@@ -1,68 +1,82 @@
-// Keyboard + mouse input. Arrows fly the jet, W/S work the throttle,
-// mouse drag steers, P pauses, R restarts, Enter starts.
-export function createInput() {
-  const keys = new Set();
-  const mouse = { down: false, dx: 0, dy: 0, lastX: 0, lastY: 0 };
-  const pressed = new Set(); // edge-triggered keys, consumed by the game
+// Canyon Thread v2 — input.
+// Keyboard flies the jet, the mouse fires the cannon. One read per frame
+// turns the raw key state into the flight model's language: pitch, roll,
+// yaw, throttle and boost. Nothing here knows about the game — it only
+// reports what the player's hands are doing.
 
-  function onKeyDown(e) {
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
-      e.preventDefault();
-    }
-    if (!e.repeat) pressed.add(e.key.toLowerCase());
-    keys.add(e.key.toLowerCase());
+export class Controls {
+  constructor() {
+    this.keys = {};
+    this.mouseDown = false;
+    this.mouseX = 0;
+    this.mouseY = 0;
+    this.throttle = 0.62; // starts at a cruise-ish setting
+    this.anyKey = false;
+    window.addEventListener('keydown', (e) => {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+      this.keys[e.code] = true;
+      this.anyKey = true;
+    });
+    window.addEventListener('keyup', (e) => {
+      this.keys[e.code] = false;
+    });
+    window.addEventListener('mousedown', (e) => {
+      if (e.button === 0) this.mouseDown = true;
+    });
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 0) this.mouseDown = false;
+    });
+    window.addEventListener('mousemove', (e) => {
+      this.mouseX = e.clientX;
+      this.mouseY = e.clientY;
+    });
+    window.addEventListener('blur', () => {
+      this.keys = {};
+      this.mouseDown = false;
+    });
   }
-  function onKeyUp(e) { keys.delete(e.key.toLowerCase()); }
-  function onMouseDown(e) {
-    mouse.down = true; mouse.lastX = e.clientX; mouse.lastY = e.clientY;
-  }
-  function onMouseMove(e) {
-    if (!mouse.down) return;
-    mouse.dx += e.clientX - mouse.lastX;
-    mouse.dy += e.clientY - mouse.lastY;
-    mouse.lastX = e.clientX; mouse.lastY = e.clientY;
-  }
-  function onMouseUp() { mouse.down = false; }
 
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
-  window.addEventListener('mousedown', onMouseDown);
-  window.addEventListener('mousemove', onMouseMove);
-  window.addEventListener('mouseup', onMouseUp);
+  pressed(code) {
+    return !!this.keys[code];
+  }
 
-  return {
-    /** True once for a key pressed since the last call. */
-    wasPressed(key) {
-      const k = key.toLowerCase();
-      if (pressed.has(k)) { pressed.delete(k); return true; }
-      return false;
-    },
-    /** Continuous flight input for this frame; mouse drag decays after use. */
-    poll() {
-      let pitch = 0; let roll = 0; let throttleDelta = 0;
-      if (keys.has('arrowup')) pitch += 1;
-      if (keys.has('arrowdown')) pitch -= 1;
-      if (keys.has('arrowleft')) roll -= 1;
-      if (keys.has('arrowright')) roll += 1;
-      if (keys.has('w') || keys.has('shift')) throttleDelta += 1;
-      if (keys.has('s') || keys.has('control')) throttleDelta -= 1;
-      // Mouse drag: right = bank right, up = nose up.
-      roll += Math.max(-1, Math.min(1, mouse.dx / 160));
-      pitch += Math.max(-1, Math.min(1, -mouse.dy / 160));
-      mouse.dx *= 0.82; mouse.dy *= 0.82;
-      return {
-        pitch: Math.max(-1, Math.min(1, pitch)),
-        roll: Math.max(-1, Math.min(1, roll)),
-        throttleDelta: throttleDelta * 0.55,
-        brake: keys.has(' '),
-      };
-    },
-    destroy() {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('mousedown', onMouseDown);
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    },
-  };
+  // Read the current control state. Pitch + pulls the nose up; roll + banks
+  // left. W/S (or Shift/Ctrl) work the throttle; Shift alone is the burner.
+  read() {
+    const k = this.keys;
+    let pitch = 0;
+    if (k.ArrowUp || k.KeyI) pitch += 1;
+    if (k.ArrowDown || k.KeyK) pitch -= 1;
+    // Mouse steering: holding the mouse off-centre nudges the nose.
+    const my = (this.mouseY / window.innerHeight - 0.5) * 2;
+    if (Math.abs(my) > 0.35 && !this.mouseDown) pitch -= my * 0.4;
+
+    let roll = 0;
+    if (k.KeyA || k.ArrowLeft) roll += 1;
+    if (k.KeyD || k.ArrowRight) roll -= 1;
+    const mx = (this.mouseX / window.innerWidth - 0.5) * 2;
+    if (Math.abs(mx) > 0.4 && !this.mouseDown) roll -= mx * 0.35;
+
+    let yaw = 0;
+    if (k.KeyQ) yaw += 1;
+    if (k.KeyE) yaw -= 1;
+
+    if (k.KeyW) this.throttle = Math.min(1, this.throttle + 0.55 * 0.016);
+    if (k.KeyS) this.throttle = Math.max(0, this.throttle - 0.55 * 0.016);
+
+    return {
+      pitch: Math.max(-1, Math.min(1, pitch)),
+      roll: Math.max(-1, Math.min(1, roll)),
+      yaw,
+      throttle: this.throttle,
+      boost: !!k.ShiftLeft || !!k.ShiftRight,
+      fire: this.mouseDown || !!k.Space,
+    };
+  }
+
+  consumeAnyKey() {
+    const had = this.anyKey;
+    this.anyKey = false;
+    return had;
+  }
 }

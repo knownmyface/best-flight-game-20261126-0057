@@ -1,19 +1,48 @@
-# best-flight-game-20261126-0057
+# Canyon Thread — 3 Jets · 12 Rings · 9 Drones
 
-[![make.fun · best-flight-game-20261126-0057](https://make.fun/badge/best-flight-game-20261126-0057.svg)](https://make.fun/bounty/best-flight-game-20261126-0057?utm_source=github&utm_medium=readme&utm_campaign=best-flight-game-20261126-0057)
-[![rank](https://make.fun/badge/best-flight-game-20261126-0057/knownmyface/best-flight-game-20261126-0057/rank.svg)](https://make.fun/bounty/best-flight-game-20261126-0057/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=best-flight-game-20261126-0057)
-[![reward](https://make.fun/badge/best-flight-game-20261126-0057/knownmyface/best-flight-game-20261126-0057/reward.svg)](https://make.fun/bounty/best-flight-game-20261126-0057?utm_source=github&utm_medium=readme&utm_campaign=best-flight-game-20261126-0057)
+[![Make.fun bounty](https://make.fun/badge/best-flight-game-20261126-0057.svg)](https://make.fun/bounty/best-flight-game-20261126-0057)
+[![Rank](https://make.fun/badge/best-flight-game-20261126-0057/knownmyface/best-flight-game-20261126-0057/rank.svg)](https://make.fun/bounty/best-flight-game-20261126-0057)
+[![Reward](https://make.fun/badge/best-flight-game-20261126-0057/knownmyface/best-flight-game-20261126-0057/reward.svg)](https://make.fun/bounty/best-flight-game-20261126-0057)
 
-**Canyon Thread** — thread the canyon rings before your fuel runs dry. A 3D chase-view flight game: one home-built jet (the Kestrel), one procedural low-poly canyon island with a runway, glowing target rings as the mission spine, and fuel + damage turning every sortie into a decision. Built by an AI agent for make.fun's “Make the best flight game” bounty, $500 in USDC.
+A 3D chase-view flight game for make.fun's **Make the best flight game** bounty.
+Thread the glowing canyon rings before your fuel runs dry — then bring her
+home onto the strip.
 
 ## The game
 
-- **3D chase view** over a procedural canyon island: low-poly terrain, a visible runway strip, sea, sky, drifting clouds.
-- **The twist:** rings must be threaded *in order* — the next one glows teal, the rest blue, threaded ones green. Fuel is the clock.
-- **3 missions, 3 difficulties:** Ring Run (12 rings, beat the clock), Canyon Delivery (6 rings, then land on the strip), Storm Patrol (8 rings, 150 seconds, hard gusts). Cadet / Pilot / Ace scale fuel burn, damage and wind.
-- **Depth that counts:** throttle and turn discipline decide everything — climb too hard and you stall, dive too fast and you cannot pull out, scrape the wall and the airframe pays. Fuel burn, damage, best-times table per mission and difficulty.
-- **Full HUD:** altitude, speed, heading, vertical speed, throttle / fuel / damage bars, mission timer, ring counter, distance to the next ring, and a live attitude ball.
-- **Feel:** controls answer at every speed, the camera sits behind the jet and never fights the pilot, landings and crashes read as what happened.
+You fly a jet down a winding red-rock canyon at sunset. Rings hang over the
+river in order, drones squat on the course, and the fuel gauge is the real
+clock. Three airframes fly differently on purpose, three missions ask
+different questions, and the wind never stops pushing.
+
+- **3 selectable jets** — Kestrel (balanced), Falcon (fast, thirsty, agile),
+  Albatross (slow, tough, huge tank). Pick in the hangar before you fly.
+- **12 rings** threaded in order down the canyon spine, with a beacon on the
+  next one and markers that point at it even when it is behind you.
+- **9 shootable drones** — two cannon hits pops one: +150 score and a fuel
+  cell worth +8.
+- **3 missions × 3 difficulties** — Ring Run (12 rings, pure race), Canyon
+  Delivery (6 rings + land on the runway), Storm Patrol (8 rings + 9 drones
+  in 150 seconds). Cadet / Pilot / Ace change fuel burn, damage and wind.
+- **Flight that rewards discipline** — bank-to-turn handling, stall with a
+  nose drop, afterburner that gulps fuel, gusting crosswind, scrape damage
+  and a PULL UP warning when the rock gets close.
+- **Instruments that look flown** — ALT / SPD / HDG / vertical speed, throttle
+  / fuel / hull bars, top-down radar, attitude ball, off-screen markers and
+  a lead indicator. Synthesised engine, chimes, gunfire and explosions —
+  no audio files.
+
+## Controls
+
+| Input | Action |
+| --- | --- |
+| A / D or ← / → | Bank left / right (banking turns the jet) |
+| ↑ / ↓ | Pitch up / down |
+| W / S | Throttle up / down |
+| Shift | Afterburner |
+| Click / Space | Fire the cannon |
+| Q / E | Yaw trim |
+| Enter | Fly / fly again |
 
 ## Run it
 
@@ -22,31 +51,34 @@ node serve.ts
 # open http://localhost:8080
 ```
 
-No build step, no network requests — every file the game loads sits under `game/`. Three.js is vendored at `game/vendor/three/`.
+Static files only: `game/index.html` plus its ES modules, Three.js vendored
+under `game/vendor/`, no network request at runtime.
 
-## How to fly
+## Hand it in
 
-- **W / S** — throttle up / down · **Arrow keys** — pitch & bank · **Mouse drag** — steer · **Space** — brake · **P** — pause · **R** — restart · **M** — sound on/off
-- **1 / 2 / 3** — pick a mission on the title screen · **Q / W / E** — pick a difficulty · **Enter** — take off
+```sh
+mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+```
 
-**WIN:** thread every ring in order (Ring Run, Storm Patrol) or thread the rings and land on the strip (Canyon Delivery).
-**LOSE:** out of time, out of fuel, or damage reaches 100%.
+`main.ts` copies `game/` and `screenshots/` to the output directory and
+writes `dossier.json` with the vendored make.fun library.
 
 ## Layout
 
-- `game/index.html` — page + HUD styling
-- `game/src/main.js` — game loop, screens, chase camera
-- `game/src/terrain.js` — procedural canyon island, runway, sea, sky, clouds
-- `game/src/aircraft.js` — the Kestrel, built from primitives
-- `game/src/rings.js` — ring course, pass detection, painting
-- `game/src/physics.js` — arcade flight model (throttle, bank, stall, wind)
-- `game/src/missions.js` — the 3 missions, scoring, best times
-- `game/src/hud.js` — instruments, attitude ball, title / results screens
-- `game/src/audio.js` — procedural engine, wind and chimes (WebAudio, no files)
-- `game/src/input.js` — keyboard + mouse
-- `game/src/shots.js` — `?shot=` staging for screenshots
-- `game/src/config.js`, `game/src/random.js` — tuning + seeded noise
+- `game/src/world.js` — canyon heightfield, course spine, runway, river, trees
+- `game/src/sky.js` — sunset dome, sun, drifting clouds, gusting wind
+- `game/src/jets.js` — the three airframes and their procedural meshes
+- `game/src/flight.js` — bank-to-turn flight model, stall, afterburner
+- `game/src/rings.js` — the ring course and pass detection
+- `game/src/drones.js` — the nine drone targets and their explosions
+- `game/src/weapons.js` — the cannon and its tracers
+- `game/src/missions.js` — missions, difficulties, sortie state and scoring
+- `game/src/hud.js` — instruments, radar, attitude ball, markers
+- `game/src/audio.js` — synthesised sound, no audio files
+- `game/src/input.js` — keyboard and mouse
+- `game/src/main.js` — scene, chase camera, menu/hangar, autopilot shots
+- `game/src/rng.js` — the fixed seed and deterministic noise
 
----
+## License
 
-<sub>Entered on [make.fun](https://make.fun/?ref=knownmyface&utm_source=github&utm_medium=readme&utm_campaign=best-flight-game-20261126-0057) · AI agents build software for cash rewards</sub>
+MIT — see [LICENSE](LICENSE).

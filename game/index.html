@@ -3,72 +3,168 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Canyon Thread — thread the canyon rings before your fuel runs dry</title>
+<title>Canyon Thread — 3 Jets · 12 Rings · 9 Drones</title>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #0b1622; }
-  body { font-family: "Segoe UI", system-ui, -apple-system, sans-serif; color: #f5f2e8; }
-  #game { display: block; width: 100vw; height: 100vh; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1210; }
+  body { font-family: "Segoe UI", system-ui, sans-serif; color: #f2f0e4; }
+  #app, #app canvas { position: fixed; inset: 0; }
+  #app canvas { display: block; }
 
   /* ---------- HUD ---------- */
-  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
-  #hud.hidden, .hidden { display: none !important; }
-  .hud-corner { position: absolute; background: rgba(8, 20, 32, 0.62); border: 1px solid rgba(245, 242, 232, 0.35);
-    border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(2px); }
-  .hud-tl { top: 14px; left: 14px; min-width: 240px; }
-  .hud-tr { top: 14px; right: 14px; min-width: 230px; text-align: right; }
-  .hud-bl { bottom: 14px; left: 14px; min-width: 320px; }
-  .hud-br { bottom: 14px; right: 14px; text-align: center; padding: 8px; }
-  .hud-title { font-size: 13px; letter-spacing: 2px; color: #ffd23f; margin-bottom: 6px; font-weight: 700; }
-  .hud-row { display: flex; justify-content: space-between; gap: 18px; line-height: 1.55; }
-  .hud-label { font-size: 12px; letter-spacing: 1.5px; color: #9fc6dd; }
-  .hud-value { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .hud-bar-row { display: flex; align-items: center; gap: 10px; line-height: 1.9; }
-  .hud-bar { flex: 1; height: 12px; background: rgba(255,255,255,0.14); border-radius: 6px; overflow: hidden; }
-  .hud-fill { height: 100%; border-radius: 6px; transition: width 0.15s linear; }
-  .fill-thr { background: #4fc3f7; width: 0%; }
-  .fill-fuel { background: #35d435; width: 100%; }
-  .fill-fuel.low { background: #ff5a1f; }
-  .fill-dmg { background: #ffd23f; width: 0%; }
-  .fill-dmg.high { background: #ff2222; }
-  .hud-hint { font-size: 11px; color: #b9cdd9; margin-top: 6px; letter-spacing: 0.4px; }
-  .hud-att-label { font-size: 10px; letter-spacing: 2px; color: #9fc6dd; margin-top: 2px; }
-  .hud-banner { position: absolute; top: 18%; left: 50%; transform: translateX(-50%);
-    font-size: 26px; font-weight: 800; letter-spacing: 2px; color: #ffd23f;
-    text-shadow: 0 2px 10px rgba(0,0,0,0.8); white-space: nowrap; }
-  .hud-warn { position: absolute; bottom: 96px; left: 50%; transform: translateX(-50%);
-    font-size: 18px; font-weight: 700; letter-spacing: 1.5px; color: #ff5a1f;
-    text-shadow: 0 2px 8px rgba(0,0,0,0.85); white-space: nowrap; }
+  #hud { position: fixed; inset: 0; pointer-events: none; display: none; z-index: 5; }
+  .panel { position: absolute; background: rgba(12, 18, 24, 0.62); border: 1px solid rgba(127, 212, 216, 0.35);
+    border-radius: 8px; padding: 8px 12px; backdrop-filter: blur(2px); }
+  .label { font-size: 10px; letter-spacing: 2px; color: #8fd8d8; }
+  .value { font-size: 26px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; }
+  .unit { font-size: 11px; color: #b8c4c4; }
 
-  /* ---------- Screens ---------- */
-  .screen { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
-    background: linear-gradient(rgba(6, 14, 24, 0.55), rgba(6, 14, 24, 0.82)); }
-  .screen-inner { max-width: 760px; width: calc(100vw - 48px); max-height: calc(100vh - 24px); overflow-y: auto;
-    background: rgba(8, 20, 32, 0.88); border: 1px solid rgba(245, 242, 232, 0.35); border-radius: 12px; padding: 18px 30px; }
-  .screen-inner h1 { font-size: 36px; letter-spacing: 6px; color: #ffd23f; text-align: center; }
-  .screen-inner h1.win { color: #35d435; }
-  .screen-inner h1.lose { color: #ff5a1f; }
-  .screen-inner h2 { font-size: 13px; letter-spacing: 2px; color: #9fc6dd; margin: 12px 0 6px; }
-  .tagline { text-align: center; font-size: 17px; font-style: italic; color: #e8f2f8; margin: 8px 0 4px; }
-  .sub { text-align: center; font-size: 14px; color: #b9cdd9; }
-  .pick-row { padding: 6px 12px; border: 1px solid rgba(245, 242, 232, 0.25); border-radius: 8px; margin: 5px 0;
-    cursor: pointer; font-size: 14px; line-height: 1.45; }
-  .pick-row.selected { border-color: #ffd23f; background: rgba(255, 210, 63, 0.14); }
-  .pick-meta { display: block; font-size: 12px; color: #9fc6dd; }
-  .controls { font-size: 14px; line-height: 1.7; color: #e8f2f8; }
-  .winlose { font-size: 14px; line-height: 1.6; color: #e8f2f8; }
-  .cta { text-align: center; font-size: 17px; font-weight: 700; color: #ffd23f; margin-top: 12px; letter-spacing: 1px; }
-  .score-line { font-size: 15px; line-height: 1.8; color: #e8f2f8; font-variant-numeric: tabular-nums; }
-  .score-total { font-size: 22px; font-weight: 800; color: #ffd23f; margin-top: 10px; }
-  .newbest { font-size: 15px; font-weight: 700; color: #35d435; margin-top: 8px; }
+  #topLeft { top: 14px; left: 14px; min-width: 210px; }
+  #topLeft .mission { font-size: 15px; font-weight: 800; letter-spacing: 2px; color: #ffd75e; }
+  #topLeft .jet { font-size: 12px; color: #9fe8ff; letter-spacing: 1px; }
+  #topLeft .row { display: flex; gap: 18px; margin-top: 6px; }
+  #topLeft .row b { font-size: 20px; }
+
+  #topRight { top: 14px; right: 14px; text-align: center; }
+  #radar { display: block; width: 132px; height: 132px; }
+  #wind { font-size: 12px; margin-top: 4px; color: #cfe8ff; }
+
+  #bottomLeft { bottom: 14px; left: 14px; display: flex; gap: 14px; align-items: flex-end; }
+  #bottomLeft .inst { text-align: center; min-width: 64px; }
+  .barWrap { margin-top: 6px; }
+  .barOuter { width: 150px; height: 10px; background: rgba(255,255,255,0.14); border-radius: 5px; overflow: hidden; }
+  .barOuter i { display: block; height: 100%; border-radius: 5px; }
+  #thr { background: #7fb4d8; } #fuel { background: #ffb347; } #hull { background: #7dff8a; }
+
+  #bottomRight { bottom: 14px; right: 14px; text-align: center; }
+  #attitude { width: 96px; height: 96px; display: block; }
+  #bank { font-size: 13px; color: #ffd75e; margin-top: 2px; }
+
+  #nextDist { position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    font-size: 15px; font-weight: 700; letter-spacing: 2px; color: #2affd5;
+    background: rgba(12, 18, 24, 0.62); border: 1px solid rgba(42, 255, 213, 0.35);
+    border-radius: 8px; padding: 7px 16px; }
+  #msg { position: absolute; top: 76px; left: 50%; transform: translateX(-50%); text-align: center;
+    font-size: 30px; font-weight: 800; letter-spacing: 3px; color: #fff; text-shadow: 0 2px 12px rgba(0,0,0,0.8);
+    opacity: 0; transition: opacity 0.25s; }
+  #msg .sub { font-size: 14px; font-weight: 400; letter-spacing: 1px; color: #ffd75e; }
+  #hint { position: absolute; bottom: 128px; left: 50%; transform: translateX(-50%); font-size: 11px;
+    color: rgba(242, 240, 228, 0.75); letter-spacing: 1px; }
+  #pullup, #stall, #fuelWarn { position: absolute; left: 50%; transform: translateX(-50%);
+    font-size: 26px; font-weight: 900; letter-spacing: 4px; color: #ff3b3b; display: none;
+    text-shadow: 0 0 18px rgba(255, 59, 59, 0.7); }
+  #pullup { top: 34%; } #stall { top: 42%; } #fuelWarn { top: 50%; color: #ffb347; text-shadow: 0 0 18px rgba(255, 179, 71, 0.7); }
+  #markers { position: absolute; inset: 0; overflow: hidden; }
+  .marker { position: absolute; width: 22px; height: 22px; border: 2px solid #2affd5; transform: translate(-50%, -50%);
+    pointer-events: none; }
+  .marker.ring { transform: translate(-50%, -50%) rotate(45deg); }
+  .marker.ring.main { border-color: #2affd5; box-shadow: 0 0 12px rgba(42, 255, 213, 0.8); }
+  .marker.drone { border-radius: 50%; border-color: #ff3b3b; width: 16px; height: 16px; }
+  .marker.edge { width: 0; height: 0; border-left: 9px solid transparent; border-right: 9px solid transparent;
+    border-bottom: 14px solid #2affd5; background: none; }
+  .marker.edge.drone { border-bottom-color: #ff3b3b; }
+
+  /* ---------- menu / hangar ---------- */
+  .screen { position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center;
+    background: linear-gradient(180deg, rgba(10, 8, 14, 0.82), rgba(10, 8, 14, 0.68)); }
+  .screen .card { width: min(1060px, 94vw); max-height: 94vh; overflow-y: auto; text-align: center; padding: 18px; }
+  h1 { font-size: 52px; letter-spacing: 6px; color: #ffd75e; text-shadow: 0 3px 24px rgba(0,0,0,0.8); }
+  .twist { font-size: 17px; color: #9fe8ff; letter-spacing: 1px; margin: 6px 0 16px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; text-align: left; }
+  .cols h2 { font-size: 12px; letter-spacing: 3px; color: #8fd8d8; margin-bottom: 8px; }
+  .pick { display: block; width: 100%; text-align: left; background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.16); border-radius: 8px; color: #f2f0e4;
+    padding: 10px 12px; margin-bottom: 8px; cursor: pointer; font-family: inherit; }
+  .pick:hover { border-color: #ffd75e; }
+  .pick.sel { border-color: #2affd5; background: rgba(42, 255, 213, 0.12); }
+  .pick b { display: block; font-size: 15px; letter-spacing: 1px; }
+  .pick span { display: block; font-size: 12px; color: #c8d4d4; margin-top: 3px; line-height: 1.35; }
+  .pick em { display: block; font-style: normal; font-size: 11px; color: #ffd75e; margin-top: 4px; }
+  .pick .bar { display: block; height: 6px; background: rgba(255,255,255,0.12); border-radius: 3px;
+    margin-top: 5px; overflow: hidden; }
+  .pick .bar i { display: block; height: 100%; }
+  .bigBtn { margin-top: 14px; font-size: 20px; font-weight: 800; letter-spacing: 3px; padding: 14px 44px;
+    border-radius: 10px; border: none; cursor: pointer; color: #1a1210; background: #ffd75e; font-family: inherit; }
+  .bigBtn:hover { background: #ffe9a8; }
+  .ghostBtn { margin-top: 14px; margin-left: 10px; font-size: 15px; font-weight: 700; letter-spacing: 2px;
+    padding: 13px 26px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.4); cursor: pointer;
+    color: #f2f0e4; background: transparent; font-family: inherit; }
+  .keys { margin-top: 12px; font-size: 12px; color: #b8c4c4; letter-spacing: 1px; }
+  #endTitle { font-size: 40px; letter-spacing: 4px; }
+  #endTitle.win { color: #7dff8a; } #endTitle.lose { color: #ff6a5a; }
+  #endStats { display: flex; gap: 26px; justify-content: center; margin: 18px 0 6px; }
+  #endStats div b { display: block; font-size: 30px; }
+  #endStats div span { font-size: 11px; letter-spacing: 2px; color: #8fd8d8; }
 </style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.min.js" } }
+</script>
 </head>
 <body>
-<canvas id="game"></canvas>
-<div id="hud" class="hidden"></div>
-<div id="screen-title" class="screen"><div class="screen-inner"></div></div>
-<div id="screen-over" class="screen hidden"><div class="screen-inner"></div></div>
+<div id="app"></div>
+
+<div id="hud">
+  <div id="topLeft" class="panel">
+    <div class="mission" id="missionName">RING RUN</div>
+    <div class="jet" id="jetName">KESTREL</div>
+    <div class="row">
+      <div><div class="label">RINGS</div><b id="rings">0/12</b></div>
+      <div><div class="label">DRONES</div><b id="drones">0/9</b></div>
+      <div><div class="label">SCORE</div><b id="score">0</b></div>
+      <div><div class="label">TIME</div><b id="clock">00:00</b></div>
+    </div>
+  </div>
+  <div id="topRight" class="panel">
+    <canvas id="radar" width="132" height="132"></canvas>
+    <div id="wind">0 kt</div>
+  </div>
+  <div id="nextDist">NEXT RING 0 m</div>
+  <div id="msg"></div>
+  <div id="pullup">PULL UP</div>
+  <div id="stall">STALL</div>
+  <div id="fuelWarn">LOW FUEL</div>
+  <div id="markers"></div>
+  <div id="bottomLeft" class="panel">
+    <div class="inst"><div class="label">ALT</div><div class="value"><span id="alt">0</span></div><div class="unit">m</div></div>
+    <div class="inst"><div class="label">SPD</div><div class="value"><span id="spd">0</span></div><div class="unit">kt</div></div>
+    <div class="inst"><div class="label">HDG</div><div class="value"><span id="hdg">000</span></div><div class="unit">deg</div></div>
+    <div class="inst"><div class="label">V/S</div><div class="value"><span id="vs">+0</span></div><div class="unit">m/s</div></div>
+    <div>
+      <div class="barWrap"><div class="label">THR</div><div class="barOuter"><i id="thr"></i></div></div>
+      <div class="barWrap"><div class="label">FUEL <span id="fuelTxt">100</span></div><div class="barOuter"><i id="fuel"></i></div></div>
+      <div class="barWrap"><div class="label">HULL <span id="hullTxt">100</span></div><div class="barOuter"><i id="hull"></i></div></div>
+    </div>
+  </div>
+  <div id="bottomRight" class="panel">
+    <canvas id="attitude" width="96" height="96"></canvas>
+    <div id="bank">BANK 0°</div>
+  </div>
+  <div id="hint">A/D BANK · ↑/↓ PITCH · W/S THROTTLE · SHIFT BURNER · CLICK / SPACE FIRE</div>
+</div>
+
+<div id="menu" class="screen">
+  <div class="card">
+    <h1>CANYON THREAD</h1>
+    <div class="twist">3 jets · 12 rings · 9 drones — thread the canyon rings before your fuel runs dry.</div>
+    <div class="cols">
+      <div><h2>MISSION</h2><div id="missionList"></div></div>
+      <div><h2>DIFFICULTY</h2><div id="diffList"></div></div>
+      <div><h2>YOUR JET</h2><div id="jetList"></div></div>
+    </div>
+    <button class="bigBtn" id="flyBtn">FLY THE CANYON</button>
+    <div class="keys">A/D bank · ↑/↓ pitch · W/S throttle · SHIFT afterburner · CLICK or SPACE fire the cannon · Q/E yaw trim</div>
+  </div>
+</div>
+
+<div id="end" class="screen">
+  <div class="card">
+    <div id="endTitle">SORTIE COMPLETE</div>
+    <div id="endStats"></div>
+    <button class="bigBtn" id="againBtn">FLY AGAIN</button>
+    <button class="ghostBtn" id="changeBtn">CHANGE JET</button>
+  </div>
+</div>
+
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
