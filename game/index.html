@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Canyon Thread — thread the canyon rings before your fuel runs dry</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0b1622; }
+  body { font-family: "Segoe UI", system-ui, -apple-system, sans-serif; color: #f5f2e8; }
+  #game { display: block; width: 100vw; height: 100vh; }
+
+  /* ---------- HUD ---------- */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  #hud.hidden, .hidden { display: none !important; }
+  .hud-corner { position: absolute; background: rgba(8, 20, 32, 0.62); border: 1px solid rgba(245, 242, 232, 0.35);
+    border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(2px); }
+  .hud-tl { top: 14px; left: 14px; min-width: 240px; }
+  .hud-tr { top: 14px; right: 14px; min-width: 230px; text-align: right; }
+  .hud-bl { bottom: 14px; left: 14px; min-width: 320px; }
+  .hud-br { bottom: 14px; right: 14px; text-align: center; padding: 8px; }
+  .hud-title { font-size: 13px; letter-spacing: 2px; color: #ffd23f; margin-bottom: 6px; font-weight: 700; }
+  .hud-row { display: flex; justify-content: space-between; gap: 18px; line-height: 1.55; }
+  .hud-label { font-size: 12px; letter-spacing: 1.5px; color: #9fc6dd; }
+  .hud-value { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .hud-bar-row { display: flex; align-items: center; gap: 10px; line-height: 1.9; }
+  .hud-bar { flex: 1; height: 12px; background: rgba(255,255,255,0.14); border-radius: 6px; overflow: hidden; }
+  .hud-fill { height: 100%; border-radius: 6px; transition: width 0.15s linear; }
+  .fill-thr { background: #4fc3f7; width: 0%; }
+  .fill-fuel { background: #35d435; width: 100%; }
+  .fill-fuel.low { background: #ff5a1f; }
+  .fill-dmg { background: #ffd23f; width: 0%; }
+  .fill-dmg.high { background: #ff2222; }
+  .hud-hint { font-size: 11px; color: #b9cdd9; margin-top: 6px; letter-spacing: 0.4px; }
+  .hud-att-label { font-size: 10px; letter-spacing: 2px; color: #9fc6dd; margin-top: 2px; }
+  .hud-banner { position: absolute; top: 18%; left: 50%; transform: translateX(-50%);
+    font-size: 26px; font-weight: 800; letter-spacing: 2px; color: #ffd23f;
+    text-shadow: 0 2px 10px rgba(0,0,0,0.8); white-space: nowrap; }
+  .hud-warn { position: absolute; bottom: 96px; left: 50%; transform: translateX(-50%);
+    font-size: 18px; font-weight: 700; letter-spacing: 1.5px; color: #ff5a1f;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.85); white-space: nowrap; }
+
+  /* ---------- Screens ---------- */
+  .screen { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(rgba(6, 14, 24, 0.55), rgba(6, 14, 24, 0.82)); }
+  .screen-inner { max-width: 760px; width: calc(100vw - 48px); max-height: calc(100vh - 24px); overflow-y: auto;
+    background: rgba(8, 20, 32, 0.88); border: 1px solid rgba(245, 242, 232, 0.35); border-radius: 12px; padding: 18px 30px; }
+  .screen-inner h1 { font-size: 36px; letter-spacing: 6px; color: #ffd23f; text-align: center; }
+  .screen-inner h1.win { color: #35d435; }
+  .screen-inner h1.lose { color: #ff5a1f; }
+  .screen-inner h2 { font-size: 13px; letter-spacing: 2px; color: #9fc6dd; margin: 12px 0 6px; }
+  .tagline { text-align: center; font-size: 17px; font-style: italic; color: #e8f2f8; margin: 8px 0 4px; }
+  .sub { text-align: center; font-size: 14px; color: #b9cdd9; }
+  .pick-row { padding: 6px 12px; border: 1px solid rgba(245, 242, 232, 0.25); border-radius: 8px; margin: 5px 0;
+    cursor: pointer; font-size: 14px; line-height: 1.45; }
+  .pick-row.selected { border-color: #ffd23f; background: rgba(255, 210, 63, 0.14); }
+  .pick-meta { display: block; font-size: 12px; color: #9fc6dd; }
+  .controls { font-size: 14px; line-height: 1.7; color: #e8f2f8; }
+  .winlose { font-size: 14px; line-height: 1.6; color: #e8f2f8; }
+  .cta { text-align: center; font-size: 17px; font-weight: 700; color: #ffd23f; margin-top: 12px; letter-spacing: 1px; }
+  .score-line { font-size: 15px; line-height: 1.8; color: #e8f2f8; font-variant-numeric: tabular-nums; }
+  .score-total { font-size: 22px; font-weight: 800; color: #ffd23f; margin-top: 10px; }
+  .newbest { font-size: 15px; font-weight: 700; color: #35d435; margin-top: 8px; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud" class="hidden"></div>
+<div id="screen-title" class="screen"><div class="screen-inner"></div></div>
+<div id="screen-over" class="screen hidden"><div class="screen-inner"></div></div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
